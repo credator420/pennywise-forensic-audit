@@ -3,3 +3,4 @@ pandas
 numpy
 plotly
 xhtml2pdf
+kaleido==0.1.0.post1
