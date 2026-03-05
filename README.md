@@ -18,8 +18,12 @@ Traditional financial audits rely on manual sampling, leaving massive blind spot
 * **Forensic Backend:** Python, Pandas, NumPy
 * **Data Visualization:** Plotly (Interactive), xhtml2pdf (Static generation)
 
+## You can try it here:
+https://pennywise-forensics.streamlit.app/
+
 ## 💻 How to Run Locally
 
 1. Clone this repository:
 ```bash
 git clone [https://github.com/YOUR_USERNAME/pennywise-forensics.git](https://github.com/YOUR_USERNAME/pennywise-forensics.git)
+
