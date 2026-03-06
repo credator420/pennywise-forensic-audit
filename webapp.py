@@ -221,7 +221,7 @@ if uploaded_file is not None:
 
         st.subheader("Critical Findings")
         st.dataframe(
-            high_risk_df[['date', 'category', 'description', 'amount', 'risk_score', 'status']],
+            high_risk_df[['date', 'category', 'description', 'amount', 'risk_score', 'failed_tests', 'status']],
             use_container_width=True
         )
 

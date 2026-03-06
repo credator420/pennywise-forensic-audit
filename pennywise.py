@@ -141,6 +141,7 @@ def calculate_score(df, shock_treshold, weight_treshold, rsf_treshold, whitelist
     #SETUP
     df['risk_score'] = 0
     df['status'] = '✅ Low Risk'
+    df['failed_tests'] = ""
 
     df['fingerprint'] = (
         df['category'].astype(str).str.strip() + 
@@ -163,17 +164,24 @@ def calculate_score(df, shock_treshold, weight_treshold, rsf_treshold, whitelist
     flag_keys = flagged_mom['category'] + "_" + flagged_mom['period']
 
     df.loc[df_keys.isin(flag_keys), 'risk_score'] += 2
-
+    df.loc[df_keys.isin(flag_keys), 'failed_tests'] += " [MoM Budget Shock] "
 
 
     #DUPLICATES CHECK
     df.loc[df['fingerprint'].isin(dup_list), 'risk_score'] += 5
+    df.loc[df['fingerprint'].isin(dup_list), 'failed_tests'] += " [Duplicate Transaction] "
 
     #MEAN CHECK
     df.loc[z_indices, 'risk_score'] += 3
+    df.loc[z_indices, 'failed_tests'] += " [ Z Score] "
 
     #RSF CHECK
     df.loc[rsf_indices, 'risk_score'] += 3
+    df.loc[rsf_indices, 'failed_tests'] += " [RSF Outlier] "
+
+    df['failed_tests'] = df['failed_tests'].str.strip().replace("", "None")
+
+    return df
 
 def status_labels(df):
 
