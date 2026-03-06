@@ -54,22 +54,15 @@ def month_over_month(df, shock_treshold, weight_treshold):
     return flagged
     
 def find_duplicate(df, whitelist):
-    category_clean = df['category'].str.lower().str.strip()
-    description_clean = df['description'].str.lower().str.strip()
-    amount_cents = df['amount'] * 100
-    amount_cents = amount_cents.astype('int')
+    lowered_whitelist = [str(x).lower().strip() for x in whitelist]
+    
+    non_whitelisted_mask = ~df['category'].str.lower().str.strip().isin(lowered_whitelist)
 
-    df['fingerprint'] = (category_clean + "|" + description_clean + "|" + amount_cents.astype('string'))
+    audit_subset = df[non_whitelisted_mask]
 
-    counts = df['fingerprint'].value_counts()
+    counts = audit_subset['fingerprint'].value_counts()
 
-    flagged = counts[counts > 1]
-
-    is_whitelisted = flagged.index.str.startswith(tuple(whitelist))
-
-    final_flags = flagged[~is_whitelisted].index
-
-    return final_flags
+    return counts[counts > 1].index.tolist()
 
 def z_score_flag(df):
     mean = df['amount'].mean()
@@ -147,17 +140,31 @@ def rsf_flag(df, rsf_treshold):
 def calculate_score(df, shock_treshold, weight_treshold, rsf_treshold, whitelist):   
     #SETUP
     df['risk_score'] = 0
+    df['status'] = '✅ Low Risk'
+
+    df['fingerprint'] = (
+        df['category'].astype(str).str.strip() + 
+        df['description'].astype(str).str.strip() +
+        df['amount'].astype(str).str.strip()
+    )
+
+    lowered_whitelist = [item.lower() for item in whitelist]
+    active_mask = ~df['category'].str.lower().isin(lowered_whitelist)
 
     flagged_mom = month_over_month(df, shock_treshold, weight_treshold)
     z_indices = z_score_flag(df)
     dup_list =find_duplicate(df, whitelist)
-    rsf_indices = rsf_flag(df, rsf_treshold)
+    rsf_indices = rsf_flag(df[active_mask], rsf_treshold)
+
+
 
     #MOM CHECK
     df_keys = df['category'] + "_" + pd.to_datetime(df['date']).dt.strftime("%Y-%m")
     flag_keys = flagged_mom['category'] + "_" + flagged_mom['period']
 
     df.loc[df_keys.isin(flag_keys), 'risk_score'] += 2
+
+
 
     #DUPLICATES CHECK
     df.loc[df['fingerprint'].isin(dup_list), 'risk_score'] += 5

@@ -5,6 +5,17 @@ import pennywise as pw
 import plotly.graph_objects as go
 import pdf_engine
 
+
+def clean_text_column(dataframe, col_name, fallback):
+    if col_name in dataframe.columns:
+        # If there are multiple columns with the same name, take the first one
+        col = dataframe[col_name]
+        if isinstance(col, pd.DataFrame):
+            col = col.iloc[:, 0]
+        
+        return col.fillna(fallback).astype(str).str.strip()
+    return fallback
+
 st.set_page_config(page_title="PennyWise", layout="wide")
 
 st.sidebar.title("⚙️ Audit Configuration")
@@ -44,16 +55,7 @@ with st.sidebar.expander("Oulier Detection (RSF)", expanded=False):
         help="How many times larger the top transaction is compared to the second largest."
     )
 
-st.sidebar.subheader("🛡️ Whitelist")
 
-default_whitelist = ["rent", "payroll", "utilities", "subscription"]
-
-user_whitelist = st.sidebar.multiselect(
-    "Ignore Duplicates In:",
-    options = default_whitelist + ["marketing", "legal", "taxes", "insurance"],
-    default = default_whitelist,
-    help = "Transactions in these categories would not be flagged as duplicates."
-)
 
 uploaded_file = st.sidebar.file_uploader("Upload Your CSV Data Here", type=["csv"])
 risk_treshold = st.sidebar.slider("Risk Sore Treshold", min_value=1, max_value=10, value=5)
@@ -61,21 +63,97 @@ risk_treshold = st.sidebar.slider("Risk Sore Treshold", min_value=1, max_value=1
 st.title("💸 PennyWise: Forensic Dashboard")
 st.markdown("### Interactive Audit & Anomaly Detection")
 
-if uploaded_file:
-    st.success("Your File Was Uploaded Succesfuly")
+if uploaded_file is not None:
+    if 'raw_df' not in st.session_state:
+        st.session_state['raw_df'] = pd.read_csv(uploaded_file)
+    
+    raw_df = st.session_state['raw_df']
+    csv_columns = raw_df.columns.tolist()
 
-    df = pd.read_csv(uploaded_file)
 
-    if len(data_filter) == 2:
-        start_date, end_date = data_filter
+    #Mapping UI
+    st.markdown('### 🔀 Data Mapping')
+    st.caption('Tell the engine which columns contain your core financial data.')
 
-        df['date'] = pd.to_datetime(df["date"])
-        mask = (df['date'].dt.date >= start_date) & ((df['date'].dt.date <= end_date))
-        df = df.loc[mask]
+    col3, col4, col5, col6 = st.columns(4)
+    with col3:
+        map_date = st.selectbox("📅 Date Column", csv_columns, index=0)
+    with col4:
+        map_category = st.selectbox("📂 Category/Dept", csv_columns, index=min(1, len(csv_columns)-1))
+    with col5:
+        map_amount = st.selectbox("💵 Amount", csv_columns, index=min(2, len(csv_columns)-1))
+    with col6:
+        map_desc = st.selectbox("📝 Description", csv_columns, index=min(3, len(csv_columns)-1))
 
-        st.info(f"Analysis filtered from {start_date} to {end_date} ({len(df)} rows)")
+    st.markdown('---')
 
-    with st.spinner("Proccesing Data..."):
+    st.sidebar.subheader("🛡️ Whitelist")
+
+    raw_categories = st.session_state['raw_df'][map_category]
+
+    dynamic_options = ["Rent", "Payroll", "Utilities", "Subscription"]
+
+    dynamic_options = list(set(dynamic_options + [str(x) for x in raw_categories]))
+
+    user_whitelist = st.sidebar.multiselect(
+            "Ignore Duplicates In:",
+            options = sorted(dynamic_options),
+            default = [],
+            help = "Transactions in these categories would not be flagged as duplicates."
+    )
+
+    if st.button("🚀 Run PennyWise Engine", type="primary"):
+
+        df = raw_df.copy()
+
+        df = df.rename(columns={
+            map_date: 'date',
+            map_category: 'category',
+            map_amount: 'amount',
+            map_desc: 'description'
+        })
+        df = df.loc[:, ~df.columns.duplicated()].copy()
+
+        df = df[['date', 'category', 'amount', 'description']]
+
+        df['amount'] = df['amount'].astype(str).str.replace(r'[$, ]', '', regex=True)
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+        df = df.dropna(subset=['amount'])
+
+        #df['date'] = df['date'].astype(str)
+        #df['date'] = pd.to_datetime(df['date'], format="%Y-%m-%d", errors='coerce').dt.date
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        df['date'] = df['date'].dt.date
+
+
+        if df['date'].isnull().all():
+            # If EVERY row became null, let's see what the raw data actually looked like
+            raw_sample = raw_df[map_date].head(1).values[0]
+            st.error(f"❌ Date Conversion Failed! Raw value: '{raw_sample}' is not being recognized.")
+            st.stop()
+
+        # 4. Drop any rows that actually are empty
+        df = df.dropna(subset=['date'])
+        
+
+        df['category'] = clean_text_column(df, 'category', 'Uncategorized')
+        df['description'] = clean_text_column(df, 'description', 'No Description')
+
+
+
+        if len(data_filter) == 2:
+            start_date, end_date = data_filter
+
+            df['date'] = pd.to_datetime(df["date"])
+            mask = (df['date'].dt.date >= start_date) & ((df['date'].dt.date <= end_date))
+            df = df.loc[mask]
+
+            st.info(f"Analysis filtered from {start_date} to {end_date} ({len(df)} rows)")
+
+        if df.empty:
+            st.error("❌ No data found for the selected date range! Please adjust your filter in the sidebar.")
+            st.stop()
+
         pw.calculate_score(
             df,
             shock_treshold=mom_schock,
@@ -85,78 +163,86 @@ if uploaded_file:
         )
         df = pw.status_labels(df)
 
-    st.success("Audit Completed!")
+        st.session_state['audit_df'] = df
+        st.session_state['audit_complete'] = True
+        st.rerun()
+            
 
-    high_risk_df = df[df['risk_score'] >= risk_treshold].sort_values(by='risk_score', ascending=False)
+    if st.session_state.get('audit_complete', False):
+        df = st.session_state['audit_df']
 
-    col1, col2 = st.columns(2)
-    col1.metric("Total Transactions", len(df))
-    col2.metric("High Risk anomalies", len(high_risk_df))
+        st.markdown("## 🚨 Audit Complete")
 
-    st.markdown("---")
-    st.subheader("🧬 Macro Forensic Analysis: Benford's Law")
+        high_risk_df = df[df['risk_score'] >= risk_treshold].sort_values(by='risk_score', ascending=False)
 
-    benford_data = pw.benfords_check(df)
-    col_chart, col_verdict = st.columns([2, 1])
+        col1, col2 = st.columns(2)
+        col1.metric("Total Transactions", len(df))
+        col2.metric("High Risk anomalies", len(high_risk_df))
 
-    with col_chart:
+        st.markdown("---")
+        st.subheader("🧬 Macro Forensic Analysis: Benford's Law")
 
-        labels = list(benford_data["expected-counts"].keys())
-        expected = list(benford_data["expected-counts"].values())
-        actuals = [benford_data["actual-counts"].get(str(i), 0) for i in range(1, 10)]
+        benford_data = pw.benfords_check(df)
+        col_chart, col_verdict = st.columns([2, 1])
 
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=labels, y=actuals, name='Actual Data', marker_color='#3b82f6'))
-        fig.add_trace(go.Scatter(x=labels, y=expected, name='Benford Expected', mode='lines+markers', line=dict(color='#ef4444', width=3)))
+        with col_chart:
 
-        fig.update_layout(
-            xaxis_title = 'Leading Digit',
-            yaxis_title = 'Frequency (%)',
-            height = 350,
-            margin = dict(l=0, r=30, t=0, b=0)
-        )
-        st.plotly_chart(fig, use_container_width=True)
+            labels = list(benford_data["expected-counts"].keys())
+            expected = list(benford_data["expected-counts"].values())
+            actuals = [benford_data["actual-counts"].get(str(i), 0) for i in range(1, 10)]
 
-    with col_verdict:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=labels, y=actuals, name='Actual Data', marker_color='#3b82f6'))
+            fig.add_trace(go.Scatter(x=labels, y=expected, name='Benford Expected', mode='lines+markers', line=dict(color='#ef4444', width=3)))
 
-        st.metric("Systemic MAD Score", f"{benford_data['mad-score']:.2f}")
+            fig.update_layout(
+                xaxis_title = 'Leading Digit',
+                yaxis_title = 'Frequency (%)',
+                height = 350,
+                margin = dict(l=0, r=30, t=0, b=0)
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-        if benford_data['status-color'] == 'success':
-            st.success(benford_data['verdict'])
-        elif benford_data['status-color'] == 'warning':
-            st.warning(benford_data["verdict"])
-        else:
-            st.error(benford_data['verdict'])
+        with col_verdict:
 
-        for insight in benford_data['insights']:
-            st.info(f"💡 **Insight:** {insight}")
+            st.metric("Systemic MAD Score", f"{benford_data['mad-score']:.2f}")
 
-    st.markdown('---')
+            if benford_data['status-color'] == 'success':
+                st.success(benford_data['verdict'])
+            elif benford_data['status-color'] == 'warning':
+                st.warning(benford_data["verdict"])
+            else:
+                st.error(benford_data['verdict'])
 
-    st.subheader("Critical Findings")
-    st.dataframe(
-        high_risk_df[['date', 'category', 'description', 'amount', 'risk_score', 'status']],
-        use_container_width=True
-    )
+            for insight in benford_data['insights']:
+                st.info(f"💡 **Insight:** {insight}")
 
-    pdf_bytes = pdf_engine.generate_executive_pdf(
-        mad_score=benford_data['mad-score'],
-        verdict=benford_data['verdict'],
-        insights=benford_data['insights'],
-        fig=fig,
-        hit_list_df=high_risk_df
-    )
+        st.markdown('---')
 
-    st.markdown('---')
-    colA, colB = st.columns([1, 3])
-
-    with colA:
-        st.download_button(
-            label='📄 Download Executive PDF',
-            data=pdf_bytes,
-            file_name='PennyWise_Audit_Report.pdf',
-            mime='application/pdf',
+        st.subheader("Critical Findings")
+        st.dataframe(
+            high_risk_df[['date', 'category', 'description', 'amount', 'risk_score', 'status']],
             use_container_width=True
         )
+
+        pdf_bytes = pdf_engine.generate_executive_pdf(
+            mad_score=benford_data['mad-score'],
+            verdict=benford_data['verdict'],
+            insights=benford_data['insights'],
+            fig=fig,
+            hit_list_df=high_risk_df
+        )
+
+        st.markdown('---')
+        colA, colB = st.columns([1, 3])
+
+        with colA:
+            st.download_button(
+                label='📄 Download Executive PDF',
+                data=pdf_bytes,
+                file_name='PennyWise_Audit_Report.pdf',
+                mime='application/pdf',
+                use_container_width=True
+            )
 
 
